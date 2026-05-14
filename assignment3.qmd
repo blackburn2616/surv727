@@ -1,0 +1,264 @@
+---
+title: "Assignment 3"
+subtitle: "Due at 11:59pm on October 14. Nicole Blackburn and Jianing Zou"
+format: pdf
+editor: visual
+---
+
+You may work in pairs or individually for this assignment. Make sure you join a group in Canvas if you are working in pairs. Turn in this assignment as an HTML or PDF file to ELMS. Make sure to include the R Markdown or Quarto file that was used to generate it. Include the GitHub link for the repository containing these files.
+
+```{r}
+library(xml2)
+library(rvest)
+library(tidyverse)
+library(robotstxt)
+```
+
+[Click here for Github Link](https://github.com/blackburn2616/SURV727_group2)
+
+## Web Scraping
+
+In this assignment, your task is to scrape some information from Wikipedia. We start with the following page about Grand Boulevard, a Chicago Community Area.
+
+<https://en.wikipedia.org/wiki/Grand_Boulevard,_Chicago>
+
+The ultimate goal is to gather the table "Historical population" and convert it to a `data.frame`.
+
+As a first step, read in the html page as an R object. Extract the tables from this object (using the `rvest` package) and save the result as a new object. Follow the instructions if there is an error. Use `str()` on this new object -- it should be a list. Try to find the position of the "Historical population" in this list since we need it in the next step.
+
+```{r}
+#| label: read html
+paths_allowed("https://en.wikipedia.org/wiki/Grand_Boulevard,_Chicago")
+
+gb_html <- read_html("https://en.wikipedia.org/wiki/Grand_Boulevard,_Chicago")
+```
+
+```{r}
+#| label: extract tables
+tables <- html_table(gb_html, trim = TRUE)
+str(tables)
+```
+
+Extract the "Historical population" table from the list and save it as another object. You can use subsetting via `[[…]]` to extract pieces from a list. Print the result.
+
+```{r}
+#| label: extract hist. pop. table
+hist_pop <- tables[[2]]
+print(hist_pop)
+```
+
+You will see that the table needs some additional formatting. Keep only want rows and columns with actual values.
+
+```{r}
+#| label: format hist. pop.
+hist_pop <- hist_pop |> 
+  select(Census, `Pop.`, `%±`) |> 
+  rename('Pop_GrandBoulevard' = `Pop.`,
+         'Change_GrandBoulevard' = `%±`) |> 
+  slice(1:nrow(hist_pop) -1)
+hist_pop <- hist_pop 
+```
+
+## Expanding to More Pages
+
+That's it for this page. However, we may want to repeat this process for other community areas. The Wikipedia page <https://en.wikipedia.org/wiki/Grand_Boulevard,_Chicago> has a section on "Places adjacent to Grand Boulevard, Chicago" at the bottom. Can you find the corresponding table in the list of tables that you created earlier? Extract this table as a new object.
+
+```{r}
+#| label: adjacent table
+adjacent <- tables[[4]]
+str(adjacent)
+```
+
+Then, grab the community areas east of Grand Boulevard and save them as a character vector. Print the result.
+
+```{r}
+#| label: areas east chr
+east_gb <- adjacent$X3[adjacent$X3 != ""]
+print(east_gb)
+```
+
+We want to use this list to create a loop that extracts the population tables from the Wikipedia pages of these places. To make this work and build valid urls, we need to replace empty spaces in the character vector with underscores. The resulting vector should look like this: "Oakland,\_Chicago" "Kenwood,\_Chicago" "Hyde_Park,\_Chicago"
+
+```{r}
+#| label: remove empty spaces
+east_gb <- east_gb |> 
+  str_replace_all(" ", "_")
+print(east_gb)
+```
+
+Build a loop to grab the population tables from each page. Add columns to the original table using `cbind()`.
+
+```{r}
+#| label: loop
+
+tables_all <- list()
+
+for (i in east_gb) {
+  url <- paste0("https://en.wikipedia.org/wiki/", i)
+  webpage <- read_html(url)
+  tables <- webpage |>
+    html_element(xpath = "//table[caption = 'Historical population']")
+  tbl2 <- html_table(tables)
+  tables_all[[i]] <- tbl2 |>
+    select(Census, `Pop.`, `%±`)
+}
+```
+
+```{r}
+#| label: name and row edits
+for (i in names(tables_all)) {
+  city <- str_remove(i, ",_.*$")
+  tables_all[[i]] <- tables_all[[i]] |> 
+    slice(1:nrow(tables_all[[i]]) - 1) |> 
+    rename(!!paste0("Pop_", city) := `Pop.`,
+           !!paste0("Change_", city) := `%±`)
+}
+
+tables_combined <- reduce(tables_all, full_join, join_by("Census"))
+```
+
+```{r}
+#| label: final table
+
+hist_pop_all <- full_join(hist_pop, tables_combined, join_by(Census))
+hist_pop_all <- hist_pop_all |> 
+  arrange(Census)
+
+print(hist_pop_all)
+```
+
+## Scraping and Analyzing Text Data
+
+Suppose we wanted to take the actual text from the Wikipedia pages instead of just the information in the table. Our goal in this section is to extract the text from the body of the pages, then do some basic text cleaning and analysis.
+
+First, scrape just the text without any of the information in the margins or headers. For example, for "Grand Boulevard", the text should start with, "**Grand Boulevard** on the [South Side](https://en.wikipedia.org/wiki/South_Side,_Chicago "South Side, Chicago") of [Chicago](https://en.wikipedia.org/wiki/Chicago "Chicago"), [Illinois](https://en.wikipedia.org/wiki/Illinois "Illinois"), is one of the ...". Make sure all of the text is in one block by using something like the code below (I called my object `description`).
+
+```{r}
+text_only <- html_nodes(gb_html, xpath = '//*[(@id = "mw-content-text")]//p')
+
+description <- text_only %>% paste(collapse = ' ')
+```
+
+Using a similar loop as in the last section, grab the descriptions of the various communities areas. Make a tibble with two columns: the name of the location and the text describing the location.
+
+```{r}
+communities <- c(east_gb)
+
+all_text <- tibble(page = character(), paragraph = character())
+
+for (i in communities) {
+  url <- paste0("https://en.wikipedia.org/wiki/", i)
+  webpage <- read_html(url)
+  
+  paragraphs <- webpage |> 
+    html_nodes(xpath = '//*[(@id = "mw-content-text")]//p') |> 
+    html_text2() |> 
+    str_squish()
+
+  all_text <- all_text |> 
+    add_row(page = i, paragraph = paragraphs |>  paste(collapse = ' '))
+}
+
+all_text <- all_text |> 
+  mutate(page = page |> 
+           str_remove("^/wiki/") |>            
+           str_remove("\\(neighborhood\\)") |>  
+           str_replace_all("_", " ") |>        
+           str_squish())    
+
+print(all_text)
+```
+
+Let's clean the data using `tidytext`. If you have trouble with this section, see the example shown in <https://www.tidytextmining.com/tidytext.html>
+
+```{r}
+library(tidytext)
+```
+
+Create tokens using `unnest_tokens`. Make sure the data is in one-token-per-row format. Remove any stop words within the data. What are the most common words used overall?
+
+**Answer**
+
+The most common words used overall are: park: 84, hyde: 75, chicago: 51, kenwood: 40, street: 34, south: 27, oakland: 25.
+
+```{r}
+unnest_tidy <- all_text |> 
+  unnest_tokens(word, paragraph)
+
+data(stop_words)
+
+unnest_tidy <- unnest_tidy |>
+  anti_join(stop_words)
+
+head(unnest_tidy)
+
+unnest_tidy |> 
+  count(word, sort = TRUE)
+```
+
+Plot the most common words within each location. What are some of the similarities between the locations? What are some of the differences?
+
+**Answer**
+
+After plotting the most common words for each page, some similarities across all locations are the name of the location, 'Chicago', 'street' and words that have to do with groups of people like 'community' and 'neighborhood'.
+
+As for differences, Oakland has 'housing', 'homes', 'constructed', 'buildings', and 'avenue' maybe from construction in the community and housing discussions. It also lists 'african' as one of the most common words, maybe reflecting the demographics of the community. Kenwood has 'school' as the second most common word, reflecting discussion about a school in Kenwood. It also lists 'votes', maybe notable elections or voting behavior happens in Kenwood. Hyde Park has 'university', maybe there is a university in Hyde Park.
+
+Using the quanteda library, we see that text1(Oakland, Chicago) – text3(Hyde Park, Chicago) are the most similar because Jaccard score is $0.156$,which is the highest among all pairs. That might because they share similar words more than sharing with other groups.
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+
+p1 <- unnest_tidy |> 
+  count(page, word, sort = TRUE) |> 
+  filter(page == "Oakland, Chicago") |> 
+  slice_max(n, n = 10) |> 
+  mutate(word = reorder(word, n)) |> 
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(title = "Oakland")
+
+p2 <- unnest_tidy |> 
+  count(page, word, sort = TRUE) |> 
+  filter(page == "Kenwood, Chicago") |> 
+  slice_max(n, n = 10) |> 
+  mutate(word = reorder(word, n)) |> 
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(title = "Kenwood")
+
+p3 <- unnest_tidy |> 
+  count(page, word, sort = TRUE) |> 
+  filter(page == "Hyde Park, Chicago") |> 
+  slice_max(n, n = 10) |> 
+  mutate(word = reorder(word, n)) |> 
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(title = "Hyde Park")
+
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+```{r}
+library(quanteda)
+library(quanteda.textstats)
+
+text_df <- unnest_tidy |> 
+  group_by(page) |> 
+  summarise(text = paste(word, collapse = " ")) |> 
+  ungroup()
+
+T_DFM <- text_df |> 
+  corpus(text_field = "text") |> 
+  tokens() |> 
+  dfm() 
+
+cat("\nInitial sparsity: \n")
+dim(T_DFM)
+
+t1 <- textstat_simil(T_DFM, 
+               margin = "documents",
+               method = "jaccard")
+t1
+```
