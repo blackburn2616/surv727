@@ -1,4 +1,17 @@
-# SURV727; Fall 2025
+# SURV727 - Fall 2025
 
-Assignment 4 and 5
+Assignments #1 - #5
 
+# Final Project
+
+Topic Modeling and Sentiment Analysis for posts in r/narcolepsy
+
+Data Files in Data Folder:
+- r_narc_nov11.csv (posts)
+- narc_threads.csv (comment threads)
+- narc_comments.csv (comments)
+- reddit_pulls.R (used to pull the posts and comments from reddit, not needed for running the .qmd file)
+
+Files:
+- baseform_en.tsv (lemmatization)
+- final_project.qmd (Final Project)
